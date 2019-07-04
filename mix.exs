@@ -23,10 +23,7 @@ defmodule Commanded.Mixfile do
 
   def application do
     [
-      extra_applications: [
-        :logger
-      ],
-      mod: {Commanded.Application, []}
+      extra_applications: [:logger]
     ]
   end
 
@@ -46,7 +43,7 @@ defmodule Commanded.Mixfile do
       "test/support"
     ]
 
-  defp elixirc_paths(_), do: ["lib", "test/helpers"]
+  defp elixirc_paths(_env), do: ["lib", "test/helpers"]
 
   defp deps do
     [
