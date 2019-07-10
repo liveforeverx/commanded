@@ -1,9 +1,9 @@
 defmodule Commanded.Aggregates.AggregateLifespanTest do
   use Commanded.StorageCase
 
-  alias Commanded.DefaultApp
   alias Commanded.Aggregates.{DefaultLifespanRouter, LifespanAggregate, LifespanRouter}
   alias Commanded.Aggregates.LifespanAggregate.{Command, Event}
+  alias Commanded.DefaultApp
   alias Commanded.EventStore
   alias Commanded.EventStore.RecordedEvent
   alias Commanded.Registration
@@ -45,7 +45,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
     } do
       command = %Command{uuid: aggregate_uuid, action: :noop}
 
-      assert :ok = DefaultLifespanRouter.dispatch(command)
+      assert :ok = DefaultLifespanRouter.dispatch(command, application: DefaultApp)
 
       refute_receive {:DOWN, ^ref, :process, _, :normal}, 10
     end
@@ -56,7 +56,8 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
     } do
       command = %Command{uuid: aggregate_uuid, action: :error}
 
-      {:error, {:failed, nil, nil}} = DefaultLifespanRouter.dispatch(command)
+      {:error, {:failed, nil, nil}} =
+        DefaultLifespanRouter.dispatch(command, application: DefaultApp)
 
       refute_receive {:DOWN, ^ref, :process, _, :normal}, 10
     end
@@ -65,13 +66,14 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       aggregate_uuid: aggregate_uuid,
       reply_to: reply_to
     } do
-      :ok =
-        LifespanRouter.dispatch(%Command{
-          uuid: aggregate_uuid,
-          action: :event,
-          reply_to: reply_to,
-          lifespan: :stop
-        })
+      command = %Command{
+        uuid: aggregate_uuid,
+        action: :event,
+        reply_to: reply_to,
+        lifespan: :stop
+      }
+
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive :after_event
       refute_received :after_command
@@ -90,7 +92,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
         lifespan: :stop
       }
 
-      :ok = LifespanRouter.dispatch(command)
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive {:DOWN, ^ref, :process, _, :normal}
     end
@@ -106,7 +108,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
         lifespan: :stop
       }
 
-      :ok = LifespanRouter.dispatch(command)
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive :after_command
       refute_received :after_event
@@ -118,13 +120,14 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       ref: ref,
       reply_to: reply_to
     } do
-      :ok =
-        LifespanRouter.dispatch(%Command{
-          uuid: aggregate_uuid,
-          action: :noop,
-          reply_to: reply_to,
-          lifespan: :stop
-        })
+      command = %Command{
+        uuid: aggregate_uuid,
+        action: :noop,
+        reply_to: reply_to,
+        lifespan: :stop
+      }
+
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive {:DOWN, ^ref, :process, _, :normal}
     end
@@ -133,13 +136,15 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       aggregate_uuid: aggregate_uuid,
       reply_to: reply_to
     } do
+      command = %Command{
+        uuid: aggregate_uuid,
+        action: :error,
+        reply_to: reply_to,
+        lifespan: :stop
+      }
+
       {:error, {:failed, _reply_to, :stop}} =
-        LifespanRouter.dispatch(%Command{
-          uuid: aggregate_uuid,
-          action: :error,
-          reply_to: reply_to,
-          lifespan: :stop
-        })
+        LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive :after_error
       refute_received :after_event
@@ -151,13 +156,15 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       ref: ref,
       reply_to: reply_to
     } do
+      command = %Command{
+        uuid: aggregate_uuid,
+        action: :error,
+        reply_to: reply_to,
+        lifespan: :stop
+      }
+
       {:error, {:failed, _reply_to, :stop}} =
-        LifespanRouter.dispatch(%Command{
-          uuid: aggregate_uuid,
-          action: :error,
-          reply_to: reply_to,
-          lifespan: :stop
-        })
+        LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive {:DOWN, ^ref, :process, _, :normal}
     end
@@ -174,8 +181,8 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
         lifespan: 25
       }
 
-      :ok = LifespanRouter.dispatch(command)
-      :ok = LifespanRouter.dispatch(command)
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive :after_command
       assert_receive :after_command
@@ -188,8 +195,9 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       aggregate_uuid: aggregate_uuid,
       ref: ref
     } do
-      :ok =
-        LifespanRouter.dispatch(%Command{uuid: aggregate_uuid, action: :noop, lifespan: :stop})
+      command = %Command{uuid: aggregate_uuid, action: :noop, lifespan: :stop}
+
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive {:DOWN, ^ref, :process, _, :normal}
     end
@@ -199,22 +207,24 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
            aggregate_uuid: aggregate_uuid,
            ref: ref
          } do
-      :ok =
-        LifespanRouter.dispatch(%Command{
-          uuid: aggregate_uuid,
-          action: :event,
-          lifespan: :infinity
-        })
+      command = %Command{
+        uuid: aggregate_uuid,
+        action: :event,
+        lifespan: :infinity
+      }
 
-      :ok =
-        LifespanRouter.dispatch(%Command{
-          uuid: aggregate_uuid,
-          action: :event,
-          lifespan: :stop
-        })
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
+
+      command = %Command{
+        uuid: aggregate_uuid,
+        action: :event,
+        lifespan: :stop
+      }
+
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert_receive {:DOWN, ^ref, :process, _, :normal}
-      assert {:ok, _snapshot} = EventStore.read_snapshot(aggregate_uuid)
+      assert {:ok, _snapshot} = EventStore.read_snapshot(DefaultApp, aggregate_uuid)
     end
 
     test "should adhere to aggregate lifespan when receiving published events after taking snapshot",
@@ -223,29 +233,31 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
            pid: pid,
            ref: ref
          } do
-      :ok =
-        LifespanRouter.dispatch(%Command{
-          uuid: aggregate_uuid,
-          action: :event,
-          lifespan: :infinity
-        })
+      command = %Command{
+        uuid: aggregate_uuid,
+        action: :event,
+        lifespan: :infinity
+      }
 
-      :ok =
-        LifespanRouter.dispatch(%Command{
-          uuid: aggregate_uuid,
-          action: :event,
-          lifespan: 1
-        })
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
+
+      command = %Command{
+        uuid: aggregate_uuid,
+        action: :event,
+        lifespan: 1
+      }
+
+      :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
       assert Process.alive?(pid)
 
-      events = aggregate_uuid |> EventStore.stream_forward() |> Enum.to_list()
+      events = EventStore.stream_forward(DefaultApp, aggregate_uuid) |> Enum.to_list()
 
       # Publish events to aggregate after taking snapshot
       send(pid, {:events, events})
 
       assert_receive {:DOWN, ^ref, :process, _, :normal}
-      assert {:ok, _snapshot} = EventStore.read_snapshot(aggregate_uuid)
+      assert {:ok, _snapshot} = EventStore.read_snapshot(DefaultApp, aggregate_uuid)
     end
 
     test "should use `:infinity` lifespan by default", %{
