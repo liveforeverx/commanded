@@ -6,6 +6,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
   require Logger
 
+  alias Commanded.StreamQueue
   alias Commanded.EventStore
   alias Commanded.EventStore.RecordedEvent
   alias Commanded.ProcessManagers.FailureContext
@@ -31,7 +32,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
       :process_event_timer,
       process_managers: %{},
       pending_acks: %{},
-      pending_events: []
+      pending_events: StreamQueue.new()
     ]
   end
 
@@ -125,28 +126,11 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
   end
 
   @doc false
-  def handle_cast(:process_pending_events, %State{pending_events: []} = state),
-    do: {:noreply, state}
-
-  @doc false
   def handle_cast(:process_pending_events, %State{} = state) do
-    %State{pending_events: [event | pending_events]} = state
-
-    case length(pending_events) do
-      0 ->
-        :ok
-
-      1 ->
-        Logger.debug(fn -> describe(state) <> " has 1 pending event to process" end)
-
-      count ->
-        Logger.debug(fn -> describe(state) <> " has #{count} pending events to process" end)
-    end
-
-    case handle_event(event, state) do
-      %State{} = state -> {:noreply, %State{state | pending_events: pending_events}}
-      reply -> reply
-    end
+    %State{pending_events: pending_events} = state
+    {events, pending_events} = StreamQueue.all_next(pending_events)
+    state = Enum.reduce(events, %{state | pending_events: pending_events}, &handle_event(&1, &2))
+    {:noreply, state}
   end
 
   @doc false
@@ -182,15 +166,11 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
           # no pending or unseen events, so state is unmodified
           state
 
-        {[], _} ->
-          # no pending events, but some unseen events so start processing them
+        {_, _} ->
           GenServer.cast(self(), :process_pending_events)
 
-          %State{state | pending_events: unseen_events}
-
-        {_, _} ->
           # already processing pending events, append the unseen events so they are processed afterwards
-          %State{state | pending_events: pending_events ++ unseen_events}
+          %State{state | pending_events: StreamQueue.append_events(pending_events, unseen_events)}
       end
 
     {:noreply, state}
@@ -413,7 +393,10 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
     do_ack_event(event, state)
 
-    %State{state | last_seen_event: event_number}
+    %State{pending_events: pending_events} = state
+    pending_events = StreamQueue.ack_event(pending_events, event)
+
+    %State{state | last_seen_event: event_number, pending_events: pending_events}
   end
 
   defp start_or_continue_process_manager(process_uuid, %State{} = state) do
