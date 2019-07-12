@@ -264,13 +264,12 @@ defmodule Commanded.Event.Handler do
       @behaviour Commanded.Event.Handler
 
       @opts unquote(opts) || []
-      @name Commanded.Event.Handler.parse_name(__MODULE__, @opts[:name])
 
       @doc false
       def start_link(opts \\ []) do
         opts = Commanded.Event.Handler.start_opts(__MODULE__, Keyword.drop(@opts, [:name]), opts)
 
-        Commanded.Event.Handler.start_link(@name, __MODULE__, opts)
+        Commanded.Event.Handler.start_link(__name__(), __MODULE__, opts)
       end
 
       @doc """
@@ -286,7 +285,7 @@ defmodule Commanded.Event.Handler do
       """
       def child_spec(opts) do
         default = %{
-          id: {__MODULE__, @name},
+          id: {__MODULE__, __name__()},
           start: {__MODULE__, :start_link, [opts]},
           restart: :permanent,
           type: :worker
@@ -296,7 +295,7 @@ defmodule Commanded.Event.Handler do
       end
 
       @doc false
-      def __name__, do: @name
+      def __name__, do: Commanded.Event.Handler.parse_name(__MODULE__, @opts[:name])
 
       @doc false
       def init, do: :ok
@@ -310,6 +309,7 @@ defmodule Commanded.Event.Handler do
     do: raise("#{inspect(module)} expects `:name` to be given")
 
   def parse_name(_module, name) when is_binary(name), do: name
+  def parse_name(_module, function_name) when is_function(function_name), do: function_name.()
   def parse_name(_module, name), do: inspect(name)
 
   @doc false
