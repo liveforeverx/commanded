@@ -192,6 +192,7 @@ defmodule Commanded.Event.Handler do
   alias Commanded.EventStore
   alias Commanded.EventStore.RecordedEvent
   alias Commanded.Subscriptions
+  alias Commanded.StreamQueue
 
   @type domain_event :: struct()
   @type metadata :: map()
@@ -347,7 +348,8 @@ defmodule Commanded.Event.Handler do
     :subscribe_from,
     :subscribe_to,
     :subscription,
-    :subscription_ref
+    :subscription_ref,
+    :pending_events
   ]
 
   @doc false
@@ -359,7 +361,8 @@ defmodule Commanded.Event.Handler do
       handler_module: handler_module,
       consistency: consistency(opts),
       subscribe_from: start_from(opts),
-      subscribe_to: subscribe_to(opts)
+      subscribe_to: subscribe_to(opts),
+      pending_events: StreamQueue.new()
     }
 
     Registration.start_link(name, __MODULE__, handler)
@@ -422,10 +425,14 @@ defmodule Commanded.Event.Handler do
   end
 
   @doc false
-  def handle_info({:events, events}, %Handler{} = state) do
+  def handle_info({:events, events}, %Handler{pending_events: pending_events} = state) do
     Logger.debug(fn -> describe(state) <> " received events: #{inspect(events)}" end)
 
     try do
+      {events, pending_events} =
+        pending_events |> StreamQueue.append_events(events) |> StreamQueue.all_next()
+
+      state = %{state | pending_events: pending_events}
       state = Enum.reduce(events, state, &handle_event/2)
 
       {:noreply, state}
@@ -434,6 +441,19 @@ defmodule Commanded.Event.Handler do
         # stop after event handling returned an error
         {:stop, reason, state}
     end
+  end
+
+  def handle_info({_ref, event_answer}, state) do
+    state =
+      case event_answer do
+        {:ok, event} -> confirm_receipt(event, state)
+        {:error, :already_seen_event, event} -> confirm_receipt(event, state)
+        {:skip, event} -> confirm_receipt(event, state)
+        {:stop, reason} -> throw(reason)
+      end
+
+    send(self(), {:events, []})
+    {:noreply, state}
   end
 
   @doc false
@@ -445,6 +465,10 @@ defmodule Commanded.Event.Handler do
     Logger.debug(fn -> describe(state) <> " subscription DOWN due to: #{inspect(reason)}" end)
 
     {:stop, reason, state}
+  end
+
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+    {:noreply, state}
   end
 
   defp subscribe_to_events(%Handler{} = state) do
@@ -462,13 +486,10 @@ defmodule Commanded.Event.Handler do
     %Handler{state | subscription: subscription, subscription_ref: subscription_ref}
   end
 
-  defp handle_event(event, handler, context \\ %{})
-
   # Ignore already seen event.
   defp handle_event(
          %RecordedEvent{event_number: event_number} = event,
-         %Handler{last_seen_event: last_seen_event} = state,
-         _context
+         %Handler{last_seen_event: last_seen_event} = state
        )
        when not is_nil(last_seen_event) and event_number <= last_seen_event do
     Logger.debug(fn -> describe(state) <> " has already seen event ##{inspect(event_number)}" end)
@@ -477,13 +498,19 @@ defmodule Commanded.Event.Handler do
   end
 
   # Delegate event to handler module.
-  defp handle_event(%RecordedEvent{} = event, %Handler{} = state, context) do
+  defp handle_event(%RecordedEvent{} = event, state) do
+    context = %{}
+    Task.async(fn -> do_handle_event(event, state, context) end)
+    state
+  end
+
+  defp do_handle_event(event, state, context) do
     case delegate_event_to_handler(event, state) do
       :ok ->
-        confirm_receipt(event, state)
+        {:ok, event}
 
       {:error, :already_seen_event} ->
-        confirm_receipt(event, state)
+        {:error, :already_seen_event, event}
 
       {:error, reason} = error ->
         Logger.error(fn ->
@@ -522,7 +549,7 @@ defmodule Commanded.Event.Handler do
         # Retry the failed event
         Logger.info(fn -> describe(state) <> " is retrying failed event" end)
 
-        handle_event(failed_event, state, context)
+        do_handle_event(failed_event, state, context)
 
       {:retry, delay, context} when is_map(context) and is_integer(delay) and delay >= 0 ->
         # Retry the failed event after waiting for the given delay, in milliseconds
@@ -532,19 +559,18 @@ defmodule Commanded.Event.Handler do
 
         :timer.sleep(delay)
 
-        handle_event(failed_event, state, context)
+        do_handle_event(failed_event, state, context)
 
       :skip ->
         # Skip the failed event by confirming receipt
         Logger.info(fn -> describe(state) <> " is skipping event" end)
-
-        confirm_receipt(failed_event, state)
+        {:skip, failed_event}
 
       {:stop, reason} ->
         # Stop event handler
         Logger.warn(fn -> describe(state) <> " has requested to stop: #{inspect(reason)}" end)
 
-        throw({:error, reason})
+        {:stop, reason}
 
       invalid ->
         Logger.warn(fn ->
@@ -552,12 +578,12 @@ defmodule Commanded.Event.Handler do
         end)
 
         # Stop event handler with original error
-        throw(error)
+        {:stop, error}
     end
   end
 
   # Confirm receipt of event
-  defp confirm_receipt(%RecordedEvent{} = event, %Handler{} = state) do
+  defp confirm_receipt(%RecordedEvent{} = event, %Handler{pending_events: pending_events} = state) do
     %RecordedEvent{event_number: event_number} = event
 
     Logger.debug(fn ->
@@ -565,8 +591,9 @@ defmodule Commanded.Event.Handler do
     end)
 
     ack_event(event, state)
+    pending_events = StreamQueue.ack_event(pending_events, event)
 
-    %Handler{state | last_seen_event: event_number}
+    %Handler{state | last_seen_event: event_number, pending_events: pending_events}
   end
 
   defp ack_event(event, %Handler{} = state) do
