@@ -499,8 +499,14 @@ defmodule Commanded.Event.Handler do
 
   # Delegate event to handler module.
   defp handle_event(%RecordedEvent{} = event, state) do
+    event_handler = self()
     context = %{}
-    Task.async(fn -> do_handle_event(event, state, context) end)
+
+    Task.async(fn ->
+      Process.put({Commanded, :dispatcher_pid}, event_handler)
+      do_handle_event(event, state, context)
+    end)
+
     state
   end
 

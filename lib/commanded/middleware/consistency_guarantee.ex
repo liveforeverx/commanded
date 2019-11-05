@@ -17,7 +17,8 @@ defmodule Commanded.Middleware.ConsistencyGuarantee do
   import Pipeline
 
   def before_dispatch(%Pipeline{} = pipeline) do
-    Pipeline.assign(pipeline, :dispatcher_pid, self())
+    dispatcher_pid = Process.get({Commanded, :dispatcher_pid}) || self()
+    Pipeline.assign(pipeline, :dispatcher_pid, dispatcher_pid)
   end
 
   def after_dispatch(%Pipeline{consistency: :eventual} = pipeline), do: pipeline
@@ -32,7 +33,7 @@ defmodule Commanded.Middleware.ConsistencyGuarantee do
     } = assigns
 
     opts = [consistency: consistency, exclude: dispatcher_pid]
-    
+
     case Subscriptions.wait_for(aggregate_uuid, aggregate_version, opts) do
       :ok ->
         pipeline
